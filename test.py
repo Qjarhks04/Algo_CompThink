@@ -1,9 +1,4 @@
-# ==========================================
-# 0. 메뉴 데이터 직접 작성
-# ==========================================
-
-
-
+# AI 도움 셀 : load_menu_db의 메뉴 데이터(더미)
 def load_menu_db():
     """코드에 직접 작성한 메뉴 목록을 반환"""
     return [
@@ -39,37 +34,63 @@ def load_menu_db():
         {"id": 30, "name": '팟타이', "category": '태국식', "ingredients": ['쌀국수면', '새우', '달걀', '숙주', '땅콩'], "spicy": 1},
     ]
 
-
-# ==========================================
 # 공통 패턴: Blacklist 포함 여부 검사
-# ==========================================
 def blacklist(item_ingredients, blacklist_set):
     """[패턴] 특정 메뉴 재료에 기피 재료가 1개라도 포함되어 있는지 검사"""
     return bool(set(item_ingredients) & blacklist_set)
 
-
-# ==========================================
 # C1. 취향 수집기
-# ==========================================
-def collect(user_inputs):
-    """참여자 입력값 정규화 (비선호 식재료 세트 + 선호 메뉴 득표 집계)"""
+def collect(user_inputs, menu_db):
+    """참여자의 기피 재료를 모으고 유효한 선호 메뉴의 투표를 집계"""
     group_dislikes = set()
     vote_counts = {}
 
-    for user in user_inputs:
-        # 비선호 식재료 최대 3개 수집 및 정제
-        dislikes = user.get("dislikes", [])[:3]
-        for item in dislikes:
-            clean_item = item.strip()
-            if clean_item:
-                group_dislikes.add(clean_item)
+    valid_menu_names = {menu["name"] for menu in menu_db}
 
-        # 선호 메뉴 최대 2개 수집 및 득표수 누적
-        likes = user.get("likes", [])[:2]
+    for user in user_inputs:
+        # 양쪽 공백을 제거하고 빈 입력은 제외
+        dislikes = [
+            item.strip()
+            for item in user.get("dislikes", [])
+            if item.strip()
+        ]
+
+        likes = [
+            menu.strip()
+            for menu in user.get("likes", [])
+            if menu.strip()
+        ]
+
+        # 빈 입력을 제외한 뒤 개수 확인
+        if len(dislikes) > 3:
+            raise ValueError(
+                "기피 재료는 한 사람당 최대 3개까지 입력할 수 있습니다."
+            )
+
+        if len(likes) > 2:
+            raise ValueError(
+                "선호 메뉴는 한 사람당 최대 2개까지 입력할 수 있습니다."
+            )
+
+        # 기피 재료 수집
+        for item in dislikes:
+            group_dislikes.add(item)
+
+        # 선호 메뉴 투표 집계
+        seen_likes = set()
+
         for menu in likes:
-            clean_menu = menu.strip()
-            if clean_menu:
-                vote_counts[clean_menu] = vote_counts.get(clean_menu, 0) + 1
+            if menu not in valid_menu_names:
+                print(
+                    f"'{menu}'은(는) 메뉴 DB에 없어 "
+                    "투표에서 제외합니다."
+                )
+                continue
+
+            # 한 사람이 같은 메뉴를 여러 번 선택해도 1표만 집계
+            if menu not in seen_likes:
+                seen_likes.add(menu)
+                vote_counts[menu] = vote_counts.get(menu, 0) + 1
 
     return {
         "blacklist": group_dislikes,
@@ -110,6 +131,14 @@ def filter_menu(group_profile, menu_db):
 # ==========================================
 def final_menu(candidates, group_profile, is_fallback=False):
     """안전 후보군 중 최다 득표 메뉴 1개 선정 및 추천 사유 생성"""
+    if not candidates:
+        return {
+            "menu_name": None,
+            "category": None,
+            "ingredients": [],
+            "reason": "추천할 메뉴 데이터가 없습니다."
+        }
+
     votes = group_profile["votes"]
 
     # 선호 득표수 기준 내림차순 정렬
@@ -119,12 +148,35 @@ def final_menu(candidates, group_profile, is_fallback=False):
 
     # 추천 사유 분기
     if is_fallback:
-        reason = "전원 비선호 조건을 100% 만족하는 메뉴가 없어, 기피 재료 겹침이 가장 적은 차선책 메뉴 중 최적안으로 선정되었습니다."
+        overlap = sorted(
+            set(top_menu["ingredients"]) & group_profile["blacklist"]
+        )
+
+        if top_votes > 0:
+            reason = (
+                "기피 재료가 없는 메뉴가 없어 기피 재료가 적게 겹치는 "
+                "차선책 후보 중 선호 투표를 기준으로 선정되었습니다. "
+                f"선택한 메뉴에 포함된 기피 재료: {', '.join(overlap)}"
+            )
+        else:
+            reason = (
+                "기피 재료가 없는 메뉴가 없어 기피 재료가 적게 겹치는 "
+                "차선책 후보를 선정했습니다. 선호 투표를 받은 후보가 없어 "
+                "후보 목록의 첫 번째 메뉴를 선택했습니다. "
+                f"선택한 메뉴에 포함된 기피 재료: {', '.join(overlap)}"
+            )
+
     else:
         if top_votes > 0:
-            reason = f"참여자 전원의 비선호 재료를 배제하였으며, 그룹 내 선호 투표 최다 득표({top_votes}표)를 얻어 선정되었습니다."
+            reason = (
+                "선정된 메뉴의 데이터에 기피 재료가 포함되지 않았으며, "
+                f"남은 후보 중 선호 투표 최다 득표({top_votes}표)로 선정되었습니다."
+            )
         else:
-            reason = "참여자 전원의 비선호 재료가 완전히 배제된 안전 후보군 중 균형 있는 기본 메뉴로 선정되었습니다."
+            reason = (
+                "기피 재료가 없는 후보 중 선호 투표를 받은 메뉴가 없어, "
+                "목록의 첫 번째 메뉴가 선정되었습니다."
+            )
 
     return {
         "menu_name": top_menu["name"],
@@ -138,25 +190,107 @@ def final_menu(candidates, group_profile, is_fallback=False):
 # 파이프라인 테스트 실행
 # ==========================================
 if __name__ == "__main__":
-    # 1. 코드에 작성한 메뉴 데이터 로드
+    # 메뉴 30종 불러오기
     menu_db = load_menu_db()
 
-    # 2. 테스트 참여자 데이터 (선호 2개, 비선호 3개 이하)
-    sample_users = [
-        {"user": "학생A", "likes": ["제육볶음", "등심돈까스"], "dislikes": ["오이", "조개"]},
-        {"user": "학생B", "likes": ["등심돈까스", "비빔밥"], "dislikes": ["땅콩", "오징어"]},
-        {"user": "학생C", "likes": ["제육볶음", "된장찌개"], "dislikes": ["홍합", "숙주"]}
+    # AI 도움 셀 : 각 상황에 맞는 출력을 테스트하기 위하여 AI의 도움을 받아 테스트 입력 데이터를 받음
+    # 1. 정상 추천
+    # 등심돈까스가 2표를 받아 추천됨
+    normal_users = [
+        {
+            "user": "학생A",
+            "likes": ["제육볶음", "등심돈까스"],
+            "dislikes": ["오이", "조개"]
+        },
+        {
+            "user": "학생B",
+            "likes": ["등심돈까스", "비빔밥"],
+            "dislikes": ["땅콩", "오징어"]
+        },
+        {
+            "user": "학생C",
+            "likes": ["비빔밥", "된장찌개"],
+            "dislikes": ["홍합", "숙주"]
+        }
     ]
 
-    # 3. 파이프라인 단계별 호출 (collect -> filter_menu -> final_menu)
-    profile = collect(sample_users)
-    safe_list, fallback_flag = filter_menu(profile, menu_db)
-    result = final_menu(safe_list, profile, is_fallback=fallback_flag)
+    # 2. 동점
+    # 제육볶음과 등심돈까스가 각각 1표
+    # 현재 코드는 메뉴 목록에서 먼저 나오는 제육볶음을 선택
+    tie_users = [
+        {
+            "user": "학생A",
+            "likes": ["제육볶음"],
+            "dislikes": []
+        },
+        {
+            "user": "학생B",
+            "likes": ["등심돈까스"],
+            "dislikes": []
+        }
+    ]
 
-    # 4. 결과 출력
-    print("==========================================")
-    print("데이터 소스: 코드에 직접 작성한 메뉴 목록")
-    print(f"추천 메뉴: {result['menu_name']} ({result['category']})")
-    print("주재료:", ", ".join(result["ingredients"]))
-    print("추천 사유:", result["reason"])
-    print("==========================================")
+    # 3. 기피 재료 때문에 선호 메뉴가 제외되는 경우
+    # 비빔밥은 2표지만, 기피 재료인 숙주가 포함되어 제외됨
+    # 남은 후보 중 등심돈까스가 1표로 추천됨
+    excluded_users = [
+        {
+            "user": "학생A",
+            "likes": ["비빔밥"],
+            "dislikes": ["숙주"]
+        },
+        {
+            "user": "학생B",
+            "likes": ["비빔밥"],
+            "dislikes": []
+        },
+        {
+            "user": "학생C",
+            "likes": ["등심돈까스"],
+            "dislikes": []
+        }
+    ]
+
+    # 4. 후보 고갈
+    # 각 메뉴의 첫 번째 재료를 기피 재료로 모아
+    # 모든 메뉴가 필터에 걸리도록 테스트 데이터를 만듦
+    all_dislikes = sorted({
+        menu["ingredients"][0]
+        for menu in menu_db
+    })
+
+    # 한 사람당 기피 재료가 3개를 넘지 않도록 나눔
+    fallback_users = [
+        {
+            "user": f"학생{i // 3 + 1}",
+            "likes": [],
+            "dislikes": all_dislikes[i:i + 3]
+        }
+        for i in range(0, len(all_dislikes), 3)
+    ]
+
+    # 상황별 테스트 데이터 모음
+    test_cases = [
+        ("정상 추천", normal_users),
+        ("동점", tie_users),
+        ("기피 재료로 선호 메뉴 제외", excluded_users),
+        ("후보 고갈", fallback_users)
+    ]
+
+    # 각 상황을 같은 추천 과정으로 실행
+    for test_name, users in test_cases:
+        profile = collect(users, menu_db)
+        candidates, is_fallback = filter_menu(profile, menu_db)
+        result = final_menu(candidates, profile, is_fallback)
+
+        print("\n==========================================")
+        print(f"테스트: {test_name}")
+        print(f"참여자 수: {len(users)}명")
+        print("기피 재료:", ", ".join(sorted(profile["blacklist"])) or "없음")
+        print("선호 투표:", profile["votes"])
+        print("차선책 사용:", "예" if is_fallback else "아니요")
+        print("후보 메뉴:", ", ".join(menu["name"] for menu in candidates))
+        print(f"추천 메뉴: {result['menu_name']} ({result['category']})")
+        print("주재료:", ", ".join(result["ingredients"]))
+        print("추천 사유:", result["reason"])
+        print("==========================================")
